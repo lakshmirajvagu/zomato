@@ -1,54 +1,107 @@
 const express = require("express");
-const Restaurant = require("../models/Restaurant");
 const router = express.Router();
+const Restaurant = require("../models/Restaurant");
 
-// ✅ Get Restaurant by ID (Fix)
-router.get("/restaurants/:id", async (req, res) => {
+router.get("/search", async (req, res) => {
   try {
-    const restaurantData = await Restaurant.findOne({
-      "restaurants.restaurant.id": req.params.id,
-    });
+    const { name, country, cuisines } = req.query;
+    let filter = {};
 
-    if (!restaurantData) {
-      return res.status(404).json({ message: "Restaurant not found" });
+    if (name) {
+      filter.Name = { $regex: name, $options: "i" };
+    }
+    if (country) {
+      filter["Location.City"] = { $regex: country, $options: "i" };
+    }
+    if (cuisines) {
+      filter.Cuisines = { $regex: cuisines, $options: "i" };
     }
 
-    // Extract the correct restaurant from the array
-    const restaurant = restaurantData.restaurants.find(
-      (r) => r.restaurant.id === req.params.id
-    );
-
-    res.json(restaurant.restaurant); // Send only the restaurant object
+    const restaurants = await Restaurant.find(filter);
+    res.json({ total: restaurants.length, restaurants });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// ✅ Get List of Restaurants with Pagination (No Change)
-router.get("/restaurants", async (req, res) => {
+
+// ✅ 1️⃣ Find Nearby Restaurants First (before :id)
+router.get("/nearby", async (req, res) => {
+  console.log("🟢 Received request to /nearby API");
+
   try {
-    let { page = 1, limit = 10 } = req.query;
-    page = parseInt(page);
-    limit = parseInt(limit);
+    const { lat, lng, range } = req.query;
 
+    if (!lat || !lng || !range) {
+      console.log("🔴 Missing required parameters");
+      return res.status(400).json({ error: "Please provide latitude, longitude, and range." });
+    }
+
+    const userLat = parseFloat(lat);
+    const userLng = parseFloat(lng);
+    const maxDistance = parseFloat(range) * 1000; // Convert km to meters
+
+    console.log(`🔍 Searching for restaurants near Lat: ${userLat}, Lng: ${userLng}, Range: ${range} km`);
+
+    const restaurants = await Restaurant.find({
+      "Location.Latitude": { $exists: true, $ne: null, $gte: userLat - 0.1, $lte: userLat + 0.1 },
+      "Location.Longitude": { $exists: true, $ne: null, $gte: userLng - 0.1, $lte: userLng + 0.1 }
+    });
+
+    console.log(`✅ Found ${restaurants.length} restaurants`);
+    res.json(restaurants);
+  } catch (error) {
+    console.error("❌ Backend Error:", error);
+    res.status(500).json({ error: error.message || "Server error" });
+  }
+});
+
+// ✅ 2️⃣ Get List of Restaurants with Pagination
+router.get("/", async (req, res) => {
+  try {
+    let { page, limit } = req.query;
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const restaurants = await Restaurant.find().skip(skip).limit(limit);
     const totalRestaurants = await Restaurant.countDocuments();
-    const restaurantDocs = await Restaurant.find()
-      .skip((page - 1) * limit)
-      .limit(limit);
-
-    // Extract only the restaurants array from each document
-    const restaurants = restaurantDocs.flatMap((doc) => doc.restaurants);
 
     res.json({
-      total: totalRestaurants,
+      totalRestaurants,
       page,
-      limit,
       totalPages: Math.ceil(totalRestaurants / limit),
-      restaurants,
+      restaurants
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error("❌ Error fetching restaurants:", error);
+    res.status(500).json({ error: "Server error" });
   }
 });
+
+// ✅ 3️⃣ Get Restaurant by ID (Now it's Last)
+router.get("/:id", async (req, res) => {
+  try {
+    console.log(`📌 Fetching restaurant with ID: ${req.params.id}`);
+
+    if (isNaN(req.params.id)) {
+      return res.status(400).json({ error: "Invalid Restaurant ID. It should be a number." });
+    }
+
+    const restaurant = await Restaurant.findOne({ RestaurantId: req.params.id });
+
+    if (!restaurant) {
+      console.log("🔴 Restaurant not found!");
+      return res.status(404).json({ error: "Restaurant not found" });
+    }
+
+    res.json(restaurant);
+  } catch (error) {
+    console.error("❌ Error fetching restaurant by ID:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
 
 module.exports = router;
